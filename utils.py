@@ -98,7 +98,11 @@ def config_parser():
                         help='Rotate camera around z axis')
     parser.add_argument("--delta_theta", type=float, default=0.0,
                         help='Rotate camera around y axis')
-    parser.add_argument("--delta_t", type=float, default=0.0,
+    parser.add_argument("--delta_x", type=float, default=0.0,
+                        help='translation of camera')
+    parser.add_argument("--delta_y", type=float, default=0.0,
+                        help='translation of camera')
+    parser.add_argument("--delta_z", type=float, default=0.0,
                         help='translation of camera (negative = zoom in)')
     # apply noise to observed image
     parser.add_argument("--noise", type=str, default='None',
@@ -130,10 +134,10 @@ rot_phi = lambda psi: np.array([
         [0, 0, 1, 0],
         [0, 0, 0, 1]])
 
-trans_t = lambda t: np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, t],
+trans_t = lambda x,y,z: np.array([
+        [1, 0, 0, x],
+        [0, 1, 0, y],
+        [0, 0, 1, z],
         [0, 0, 0, 1]])
 
 def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *kwargs):
@@ -161,10 +165,13 @@ def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *kwarg
 
     img_rgb = np.asarray(img_rgb*255, dtype=np.uint8)
     obs_img_pose = np.array(frames[obs_img_num]['transform_matrix']).astype(np.float32)
-    phi, theta, psi, t = kwargs
-    start_pose =  trans_t(t) @ rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi)  @ obs_img_pose
+    phi, theta, psi, x, y, z = kwargs
+    start_pose =  trans_t(x, y, z) @ rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi)  @ obs_img_pose
     return img_rgb, [H, W, focal], start_pose, obs_img_pose # image of type uint8
 
+def get_pose(phi, theta, psi, x, y, z, obs_img_pose):
+    pose =  trans_t(x, y, z) @ rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi)  @ obs_img_pose
+    return pose
 
 def rgb2bgr(img_rgb):
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
@@ -178,20 +185,23 @@ def show_img(title, img_rgb):  # img - rgb image
     cv2.destroyAllWindows()
 
 
-def find_POI(img_rgb, DEBUG=False): # img - RGB image in range 0...255
+def find_POI(img_rgb, num_points, DEBUG=False): # img - RGB image in range 0...255
     img = np.copy(img_rgb)
     img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    # keypoints = cv2.goodFeaturesToTrack(img_gray, num_points, 0.01, 20).astype(int)
+    # keypoints = keypoints.reshape((keypoints.shape[0],2))
+    # return keypoints # pixel coordinates
     sift = cv2.SIFT_create()
     keypoints = sift.detect(img_gray, None)
     if DEBUG:
-        img = cv2.drawKeypoints(img_gray, keypoints, img)
-        show_img("Detected points", img)
+         img = cv2.drawKeypoints(img_gray, keypoints, img)
+         show_img("Detected points", img)
     xy = [keypoint.pt for keypoint in keypoints]
     xy = np.array(xy).astype(int)
     # Remove duplicate points
     xy_set = set(tuple(point) for point in xy)
     xy = np.array([list(point) for point in xy_set]).astype(int)
-    return xy # pixel coordinates
+    return xy
 
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
@@ -309,7 +319,7 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     imgs = imgs = [imread(f)[..., :3] / 255. for f in imgfiles]
     imgs = np.stack(imgs, -1)
 
-    print('Loaded image data', imgs.shape, poses[:, -1, 0])
+    # print('Loaded image data', imgs.shape, poses[:, -1, 0])
     return poses, bds, imgs
 
 
@@ -402,7 +412,7 @@ def spherify_poses(poses, bds):
 
 def load_llff_data(data_dir, model_name, obs_img_num, *kwargs, factor=8, recenter=True, bd_factor=.75, spherify=False):
     poses, bds, imgs = _load_data(data_dir + str(model_name) + "/", factor=factor)  # factor=8 downsamples original imgs by 8x
-    print('Loaded', data_dir + str(model_name) + "/", bds.min(), bds.max())
+    # print('Loaded', data_dir + str(model_name) + "/", bds.min(), bds.max())
 
     # Correct rotation matrix ordering and move variable dim to axis 0
     poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
@@ -428,6 +438,6 @@ def load_llff_data(data_dir, model_name, obs_img_num, *kwargs, factor=8, recente
     poses = poses[:,:3,:4]
     obs_img = images[obs_img_num]
     obs_img_pose = np.concatenate((poses[obs_img_num], np.array([[0,0,0,1.]])), axis=0)
-    phi, theta, psi, t = kwargs
-    start_pose = rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi) @ trans_t(t) @ obs_img_pose
+    phi, theta, psi, x, y, z = kwargs
+    start_pose = rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi) @ trans_t(x, y, z) @ obs_img_pose
     return obs_img, hwf, start_pose, obs_img_pose, bds
