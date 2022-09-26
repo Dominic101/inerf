@@ -10,9 +10,9 @@ from render_helpers import render, to8b, get_rays
 from inerf_helpers import camera_transf
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
+# np.random.seed(0)
 
-def run():
+def run(experiment_params=None, log_directory="", log_results=False):
 
     # Parameters
     parser = config_parser()
@@ -26,20 +26,26 @@ def run():
     lrate = args.lrate
     dataset_type = args.dataset_type
     sampling_strategy = args.sampling_strategy
-    delta_phi, delta_theta, delta_psi, delta_t = args.delta_phi, args.delta_theta, args.delta_psi, args.delta_t
+    delta_phi, delta_theta, delta_psi, delta_x, delta_y, delta_z = args.delta_phi, args.delta_theta, args.delta_psi, args.delta_x, args.delta_y, args.delta_z
     noise, sigma, amount = args.noise, args.sigma, args.amount
     delta_brightness = args.delta_brightness
+    all_pose_est = np.zeros((NUM_ITERS+1, 4,4))
+
+    if experiment_params is not None: 
+        delta_phi, delta_theta, delta_psi, delta_x, delta_y, delta_z, obs_img_num, model_name = experiment_params
+        args.model_name = model_name
+
 
     # Load and pre-process an observed image
     # obs_img -> rgb image with elements in range 0...255
     if dataset_type == 'blender':
         obs_img, hwf, start_pose, obs_img_pose = load_blender(args.data_dir, model_name, obs_img_num,
-                                                args.half_res, args.white_bkgd, delta_phi, delta_theta, delta_psi, delta_t)
+                                                args.half_res, args.white_bkgd, delta_phi, delta_theta, delta_psi, delta_x, delta_y, delta_z)
         H, W, focal = hwf
         near, far = 2., 6.  # Blender
     else:
         obs_img, hwf, start_pose, obs_img_pose, bds = load_llff_data(args.data_dir, model_name, obs_img_num, delta_phi,
-                                                delta_theta, delta_psi, delta_t, factor=8, recenter=True, bd_factor=.75, spherify=spherify)
+                                                delta_theta, delta_psi, delta_x, delta_y, delta_z, factor=8, recenter=True, bd_factor=.75, spherify=spherify)
         H, W, focal = hwf
         H, W = int(H), int(W)
         if args.no_ndc:
@@ -112,6 +118,8 @@ def run():
     }
     render_kwargs.update(bds_dict)
 
+    all_pose_est[0] = start_pose
+
     # Create pose transformation model
     start_pose = torch.Tensor(start_pose).to(device)
     cam_transf = camera_transf().to(device)
@@ -131,7 +139,7 @@ def run():
     if OVERLAY is True:
         imgs = []
 
-    for k in range(300):
+    for k in range(NUM_ITERS):
 
         if sampling_strategy == 'random':
             rand_inds = np.random.choice(coords.shape[0], size=batch_size, replace=False)
@@ -177,7 +185,7 @@ def run():
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
 
-        if (k + 1) % 20 == 0 or k == 0:
+        if k % 1 == 0:
             print('Step: ', k)
             print('Loss: ', loss)
 
@@ -198,6 +206,7 @@ def run():
                 print('Rotation error: ', rot_error)
                 print('Translation error: ', translation_error)
                 print('-----------------------------------')
+                all_pose_est[k] = pose_dummy
 
             if OVERLAY is True:
                 with torch.no_grad():
@@ -213,9 +222,13 @@ def run():
     if OVERLAY is True:
         imageio.mimwrite(os.path.join(testsavedir, 'video.gif'), imgs, fps=8) #quality = 8 for mp4 format
 
+    if log_results:
+        with open(log_directory + "/" + "inerf_" + model_name + "_" + str(obs_img_num) + "_" + "poses.npy", 'wb') as f:
+            np.save(f, all_pose_est)
+
 DEBUG = False
 OVERLAY = False
-
+NUM_ITERS = 300
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
     run()
