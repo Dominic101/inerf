@@ -13,7 +13,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # np.random.seed(0)
 
 def run(experiment_params=None, log_directory="", log_results=False):
-
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
     # Parameters
     parser = config_parser()
     args = parser.parse_args()
